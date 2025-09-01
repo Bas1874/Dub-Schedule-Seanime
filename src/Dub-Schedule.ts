@@ -31,8 +31,10 @@ function init() {
     // This hook intercepts the schedule data just before it's sent to the user's screen.
     $app.onAnimeScheduleItems((e) => {
         try {
-            // Create a clean, definitive list of original (sub) items.
+            // First, we create a clean, definitive list of original (sub) items.
+            // This prevents duplicate [DUB] entries from previous runs.
             const originalSubItems = (e.items || []).filter(item => !item.title.startsWith("[DUB]"));
+            // We store this clean list in the store for consistent access.
             $store.set("original-schedule-items", originalSubItems);
 
             // Get the user's current filter preference and the list of dubbed items.
@@ -45,8 +47,7 @@ function init() {
             } else if (filter === "sub") {
                 e.items = originalSubItems;
             } else { // "all"
-                // --- THIS IS THE FIX ---
-                // We now use a unique key for subs and dubs to prevent overwriting.
+                // Use a unique key for subs and dubs to prevent overwriting.
                 const combinedMap = new Map<string, Anime_ScheduleItem>();
                 
                 // Add subbed items with a '-sub' suffix in their key.
@@ -99,6 +100,7 @@ function init() {
             $storage.set("schedule-filter", newFilter);
             $store.set("schedule-filter", newFilter);
             ctx.toast.info(`Filter set to: ${newFilter.toUpperCase()}. Refreshing...`);
+            // Use the confirmed refresh method
             $anilist.refreshAnimeCollection();
         }, [filterState]);
 
@@ -143,17 +145,19 @@ function init() {
                             image: anime.coverImage?.large || anime.coverImage?.medium!,
                             episodeNumber: dubItem.episodeNumber,
                             isMovie: anime.format === "MOVIE",
-                            isSeasonFinale: !!anime.episodes && dubItem.episodeNumber === anime.episodes,
+                            // Safely parse anime.episodes before comparing to set the finale flag.
+                            isSeasonFinale: !!anime.episodes && dubItem.episodeNumber === parseInt($toString(anime.episodes)),
                         };
                         realDubItems.push(realItem);
 
                         // Step 2: Project FUTURE episodes for this anime
-                        const episodesLeft = anime.episodes - dubItem.episodeNumber;
+                        const totalEpisodes = parseInt($toString(anime.episodes));
+                        const episodesLeft = totalEpisodes - dubItem.episodeNumber;
                         if (episodesLeft > 0) {
                             for (let i = 1; i <= episodesLeft; i++) {
                                 const futureEpisodeNumber = dubItem.episodeNumber + i;
                                 const futureDate = new Date(airingDate);
-                                futureDate.setDate(futureDate.getDate() + (7 * i));
+                                futureDate.setDate(futureDate.getDate() + (7 * i)); // Add 'i' weeks
 
                                 projectedDubItems.push({
                                     mediaId: anime.id,
@@ -163,7 +167,8 @@ function init() {
                                     image: anime.coverImage?.large || anime.coverImage?.medium!,
                                     episodeNumber: futureEpisodeNumber,
                                     isMovie: false,
-                                    isSeasonFinale: futureEpisodeNumber === anime.episodes,
+                                    // Set finale flag correctly for projected episodes
+                                    isSeasonFinale: futureEpisodeNumber === totalEpisodes,
                                 });
                             }
                         }
@@ -174,6 +179,7 @@ function init() {
                 const allDubbedItems = [...realDubItems, ...projectedDubItems];
                 $store.set("dub-schedule-items", allDubbedItems);
                 
+                // Refresh the collection to trigger the hook with the new data
                 $anilist.refreshAnimeCollection();
 
             } catch (error) {
