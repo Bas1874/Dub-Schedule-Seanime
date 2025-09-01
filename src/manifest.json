@@ -2,15 +2,15 @@
     "id": "Dub-Schedule",
     "name": "Dub Schedule",
     "version": "1.0.0",
-    "manifestURI": "",
+    "manifestURI": "https://raw.githubusercontent.com/Bas1874/Dub-Schedule-Seanime/refs/heads/main/src/manifest.json",
     "language": "typescript",
     "type": "plugin",
     "description": "Adds dubbed anime to the schedule page.",
     "author": "Bas1874",
-    "icon": "",
+    "icon": "https://raw.githubusercontent.com/Bas1874/Dub-Schedule-Seanime/refs/heads/main/src/icons/icon.png",
     "website": "",
     "lang": "multi",
-    "payloadURI": "",
+    "payloadURI": "https://raw.githubusercontent.com/Bas1874/Dub-Schedule-Seanime/refs/heads/main/src/Dub-Schedule.ts",
     "plugin": {
         "version": "1",
         "permissions": {
