@@ -17,5 +17,5 @@
             "scopes": ["anilist", "system", "storage"]
         }
     },
-    "isDevelopment": true
+    "isDevelopment": false
 }
