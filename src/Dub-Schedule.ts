@@ -25,38 +25,39 @@ interface Anime_ScheduleItem {
     isSeasonFinale: boolean;
 }
 
-type ScheduleFilter = "all" | "dub" | "sub";
+type ScheduleFilter = "all" | "dub" | "sub" | "prefer-dub";
 
 function init() {
     // This hook intercepts the schedule data just before it's sent to the user's screen.
     $app.onAnimeScheduleItems((e) => {
         try {
-            // First, we create a clean, definitive list of original (sub) items.
-            // This prevents duplicate [DUB] entries from previous runs.
+            // First, create a clean, definitive list of original (sub) items.
             const originalSubItems = (e.items || []).filter(item => !item.title.startsWith("[DUB]"));
-            // We store this clean list in the store for consistent access.
-            $store.set("original-schedule-items", originalSubItems);
-
+            
             // Get the user's current filter preference and the list of dubbed items.
             const filter = $store.get<ScheduleFilter>("schedule-filter") || "all";
             const dubbedItems = $store.get<Anime_ScheduleItem[]>("dub-schedule-items") || [];
 
-            // Apply the chosen filter
+            // Filtering logic has been updated to remove "prefer-sub"
             if (filter === "dub") {
                 e.items = dubbedItems;
-            } else if (filter === "sub") {
+            } 
+            else if (filter === "sub") {
                 e.items = originalSubItems;
-            } else { // "all"
-                // Use a unique key for subs and dubs to prevent overwriting.
+            } 
+            else if (filter === "prefer-dub") {
                 const combinedMap = new Map<string, Anime_ScheduleItem>();
-                
-                // Add subbed items with a '-sub' suffix in their key.
+                // Add subs first
+                originalSubItems.forEach(item => combinedMap.set(`${item.mediaId}-${item.episodeNumber}`, item));
+                // Add dubs second, overwriting any subs for the same episode
+                dubbedItems.forEach(item => combinedMap.set(`${item.mediaId}-${item.episodeNumber}`, item));
+                e.items = Array.from(combinedMap.values());
+            } 
+            else { // "all"
+                // For the "all" filter, use a unique key to ensure no overwriting occurs.
+                const combinedMap = new Map<string, Anime_ScheduleItem>();
                 originalSubItems.forEach(item => combinedMap.set(`${item.mediaId}-${item.episodeNumber}-sub`, item));
-                
-                // Add dubbed items with a '-dub' suffix in their key.
                 dubbedItems.forEach(item => combinedMap.set(`${item.mediaId}-${item.episodeNumber}-dub`, item));
-                
-                // The final list now contains both versions if they exist.
                 e.items = Array.from(combinedMap.values());
             }
 
@@ -89,22 +90,30 @@ function init() {
             withContent: true,
         });
 
-        // Event handlers for the tray buttons
+        // Event handlers for the tray buttons, "set-filter-prefer-sub" removed
         ctx.registerEventHandler("set-filter-all", () => filterState.set("all"));
         ctx.registerEventHandler("set-filter-dub", () => filterState.set("dub"));
         ctx.registerEventHandler("set-filter-sub", () => filterState.set("sub"));
+        ctx.registerEventHandler("set-filter-prefer-dub", () => filterState.set("prefer-dub"));
 
         // This effect runs whenever the user clicks a filter button.
         ctx.effect(() => {
             const newFilter = filterState.get();
             $storage.set("schedule-filter", newFilter);
             $store.set("schedule-filter", newFilter);
-            ctx.toast.info(`Filter set to: ${newFilter.toUpperCase()}. Refreshing...`);
-            // Use the confirmed refresh method
+
+            // Create a user-friendly text for the toast message
+            let filterText = newFilter.toUpperCase();
+            if (newFilter === 'prefer-dub') filterText = "Prefer Dubs";
+
+            ctx.toast.info(`Filter set to: ${filterText}. Refreshing...`);
+            
+            // This method works reliably to trigger a schedule refresh.
             $anilist.refreshAnimeCollection();
+
         }, [filterState]);
 
-        // Define the UI components inside the tray pop-up.
+        // Define the UI components inside the tray pop-up, "Prefer Subs" button removed.
         tray.render(() => {
             const currentFilter = filterState.get();
             return tray.stack({
@@ -112,6 +121,7 @@ function init() {
                 items: [
                     tray.text("Display Options"),
                     tray.button("All (Subs & Dubs)", { intent: currentFilter === "all" ? "primary" : "gray-subtle", onClick: "set-filter-all" }),
+                    tray.button("Prefer Dubs", { intent: currentFilter === "prefer-dub" ? "primary" : "gray-subtle", onClick: "set-filter-prefer-dub" }),
                     tray.button("Dubs Only", { intent: currentFilter === "dub" ? "primary" : "gray-subtle", onClick: "set-filter-dub" }),
                     tray.button("Subs Only", { intent: currentFilter === "sub" ? "primary" : "gray-subtle", onClick: "set-filter-sub" }),
                 ],
@@ -131,11 +141,12 @@ function init() {
                 const realDubItems: Anime_ScheduleItem[] = [];
                 const projectedDubItems: Anime_ScheduleItem[] = [];
 
-                // Step 1: Process the REAL schedule items from the API
                 for (const dubItem of dubSchedule) {
                     const anime = findAnimeInCollection(dubItem.media.media.id, animeCollection);
-                    if (anime && anime.episodes != null) {
+                    
+                    if (anime) {
                         const airingDate = new Date(dubItem.episodeDate);
+                        const totalEpisodes = anime.episodes ? parseInt($toString(anime.episodes)) : 0;
                         
                         const realItem: Anime_ScheduleItem = {
                             mediaId: anime.id,
@@ -145,42 +156,38 @@ function init() {
                             image: anime.coverImage?.large || anime.coverImage?.medium!,
                             episodeNumber: dubItem.episodeNumber,
                             isMovie: anime.format === "MOVIE",
-                            // Safely parse anime.episodes before comparing to set the finale flag.
-                            isSeasonFinale: !!anime.episodes && dubItem.episodeNumber === parseInt($toString(anime.episodes)),
+                            isSeasonFinale: totalEpisodes > 0 && dubItem.episodeNumber === totalEpisodes,
                         };
                         realDubItems.push(realItem);
 
-                        // Step 2: Project FUTURE episodes for this anime
-                        const totalEpisodes = parseInt($toString(anime.episodes));
-                        const episodesLeft = totalEpisodes - dubItem.episodeNumber;
-                        if (episodesLeft > 0) {
-                            for (let i = 1; i <= episodesLeft; i++) {
-                                const futureEpisodeNumber = dubItem.episodeNumber + i;
-                                const futureDate = new Date(airingDate);
-                                futureDate.setDate(futureDate.getDate() + (7 * i)); // Add 'i' weeks
+                        if (totalEpisodes > 0) {
+                            const episodesLeft = totalEpisodes - dubItem.episodeNumber;
+                            if (episodesLeft > 0) {
+                                for (let i = 1; i <= episodesLeft; i++) {
+                                    const futureEpisodeNumber = dubItem.episodeNumber + i;
+                                    const futureDate = new Date(airingDate);
+                                    futureDate.setDate(futureDate.getDate() + (7 * i));
 
-                                projectedDubItems.push({
-                                    mediaId: anime.id,
-                                    title: `[DUB] ${anime.title?.userPreferred}`,
-                                    time: futureDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }),
-                                    dateTime: futureDate.toISOString(),
-                                    image: anime.coverImage?.large || anime.coverImage?.medium!,
-                                    episodeNumber: futureEpisodeNumber,
-                                    isMovie: false,
-                                    // Set finale flag correctly for projected episodes
-                                    isSeasonFinale: futureEpisodeNumber === totalEpisodes,
-                                });
+                                    projectedDubItems.push({
+                                        mediaId: anime.id,
+                                        title: `[DUB] ${anime.title?.userPreferred}`,
+                                        time: futureDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }),
+                                        dateTime: futureDate.toISOString(),
+                                        image: anime.coverImage?.large || anime.coverImage?.medium!,
+                                        episodeNumber: futureEpisodeNumber,
+                                        isMovie: false,
+                                        isSeasonFinale: futureEpisodeNumber === totalEpisodes,
+                                    });
+                                }
                             }
                         }
                     }
                 }
 
-                // Step 3: Combine real and projected items and save to the store
                 const allDubbedItems = [...realDubItems, ...projectedDubItems];
                 $store.set("dub-schedule-items", allDubbedItems);
                 
-                // Refresh the collection to trigger the hook with the new data
-                $anilist.refreshAnimeCollection();
+                $app.invalidateClientQuery(["GetAnimeSchedule"]);
 
             } catch (error) {
                 console.error("Dub-Schedule UI Error:", error);
