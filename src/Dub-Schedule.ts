@@ -26,13 +26,18 @@ interface Anime_ScheduleItem {
 }
 
 type ScheduleFilter = "all" | "dub" | "sub" | "prefer-dub";
+type DubFormat = 'icon' | 'bracket'; // New type for the format setting
 
 function init() {
     // This hook intercepts the schedule data just before it's sent to the user's screen.
     $app.onAnimeScheduleItems((e) => {
         try {
+            // Get the user's current format preference
+            const dubFormat = $store.get<DubFormat>("dub-format") || 'icon';
+            const dubPrefix = dubFormat === 'icon' ? "🎙️Dub - " : "[DUB] ";
+
             // First, create a clean, definitive list of original (sub) items.
-            const originalSubItems = (e.items || []).filter(item => !item.title.startsWith("🎙️Dub - "));
+            const originalSubItems = (e.items || []).filter(item => !item.title.startsWith(dubPrefix));
             
             // Get the user's current filter preference and the list of dubbed items.
             const filter = $store.get<ScheduleFilter>("schedule-filter") || "all";
@@ -82,6 +87,11 @@ function init() {
         const savedFilter = $storage.get<ScheduleFilter>("schedule-filter") || "all";
         const filterState = ctx.state<ScheduleFilter>(savedFilter);
         $store.set("schedule-filter", savedFilter);
+        
+        // New state for dub format
+        const savedDubFormat = $storage.get<DubFormat>("dub-format") || 'icon';
+        const dubFormatState = ctx.state<DubFormat>(savedDubFormat);
+        $store.set("dub-format", savedDubFormat);
 
         // --- TRAY MENU ---
         const tray = ctx.newTray({
@@ -90,11 +100,15 @@ function init() {
             withContent: true,
         });
 
-        // Event handlers for the tray buttons
+        // Event handlers for the filter buttons
         ctx.registerEventHandler("set-filter-all", () => filterState.set("all"));
         ctx.registerEventHandler("set-filter-dub", () => filterState.set("dub"));
         ctx.registerEventHandler("set-filter-sub", () => filterState.set("sub"));
         ctx.registerEventHandler("set-filter-prefer-dub", () => filterState.set("prefer-dub"));
+
+        // New event handlers for the format buttons
+        ctx.registerEventHandler("set-format-icon", () => dubFormatState.set('icon'));
+        ctx.registerEventHandler("set-format-bracket", () => dubFormatState.set('bracket'));
 
         // This effect runs whenever the user clicks a filter button.
         ctx.effect(() => {
@@ -102,20 +116,35 @@ function init() {
             $storage.set("schedule-filter", newFilter);
             $store.set("schedule-filter", newFilter);
 
-            // Create a user-friendly text for the toast message
             let filterText = newFilter.toUpperCase();
             if (newFilter === 'prefer-dub') filterText = "Prefer Dubs";
 
             ctx.toast.info(`Filter set to: ${filterText}. Refreshing...`);
-            
-            // This method works reliably to trigger a schedule refresh.
-            $anilist.refreshAnimeCollection();
+            $anilist.refreshAnimeCollection(); // Triggers UI refresh
 
         }, [filterState]);
+        
+        // New effect for the dub format toggle
+        ctx.effect(async () => {
+            const newFormat = dubFormatState.get();
+            $storage.set("dub-format", newFormat);
+            $store.set("dub-format", newFormat);
+
+            const formatText = newFormat === 'icon' ? "Icon (🎙️)" : "Bracket ([DUB])";
+            ctx.toast.info(`Dub format set to: ${formatText}. Refreshing...`);
+            
+            // Re-process the schedule data with the new format
+            await fetchAndProcessDubSchedule();
+            
+            // Trigger UI refresh using the SAME mechanism
+            $anilist.refreshAnimeCollection();
+
+        }, [dubFormatState]);
 
         // Define the UI components inside the tray pop-up.
         tray.render(() => {
             const currentFilter = filterState.get();
+            const currentFormat = dubFormatState.get();
             return tray.stack({
                 gap: 2,
                 items: [
@@ -124,6 +153,24 @@ function init() {
                     tray.button("Prefer Dubs", { intent: currentFilter === "prefer-dub" ? "primary" : "gray-subtle", onClick: "set-filter-prefer-dub" }),
                     tray.button("Dubs Only", { intent: currentFilter === "dub" ? "primary" : "gray-subtle", onClick: "set-filter-dub" }),
                     tray.button("Subs Only", { intent: currentFilter === "sub" ? "primary" : "gray-subtle", onClick: "set-filter-sub" }),
+                    
+                    // FIX: Replaced tray.divider() with a styled div to create a visual separator
+                    tray.div([], {
+                        style: {
+                            height: "1px",
+                            backgroundColor: "rgba(255, 255, 255, 0.1)",
+                            margin: "8px 0"
+                        }
+                    }),
+                    
+                    tray.text("Dub Title Format"),
+                    tray.flex({
+                        gap: 2,
+                        items: [
+                             tray.button("🎙️Dub", { intent: currentFormat === "icon" ? "primary" : "gray-subtle", onClick: "set-format-icon", width: "50%" }),
+                             tray.button("[DUB]", { intent: currentFormat === "bracket" ? "primary" : "gray-subtle", onClick: "set-format-bracket", width: "50%" }),
+                        ]
+                    })
                 ],
             });
         });
@@ -140,6 +187,10 @@ function init() {
 
                 const realDubItems: Anime_ScheduleItem[] = [];
                 const projectedDubItems: Anime_ScheduleItem[] = [];
+                
+                // Get the current format preference to build the correct title
+                const dubFormat = $store.get<DubFormat>("dub-format") || 'icon';
+                const dubPrefix = dubFormat === 'icon' ? "🎙️Dub - " : "[DUB] ";
 
                 for (const dubItem of dubSchedule) {
                     const anime = findAnimeInCollection(dubItem.media.media.id, animeCollection);
@@ -150,7 +201,7 @@ function init() {
                         
                         const realItem: Anime_ScheduleItem = {
                             mediaId: anime.id,
-                            title: `🎙️Dub - ${anime.title?.userPreferred}`,
+                            title: `${dubPrefix}${anime.title?.userPreferred}`, // Use the selected prefix
                             time: airingDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }),
                             dateTime: airingDate.toISOString(),
                             image: anime.coverImage?.large || anime.coverImage?.medium!,
@@ -170,7 +221,7 @@ function init() {
 
                                     projectedDubItems.push({
                                         mediaId: anime.id,
-                                        title: `🎙️Dub - ${anime.title?.userPreferred}`,
+                                        title: `${dubPrefix}${anime.title?.userPreferred}`, // Use the selected prefix
                                         time: futureDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }),
                                         dateTime: futureDate.toISOString(),
                                         image: anime.coverImage?.large || anime.coverImage?.medium!,
