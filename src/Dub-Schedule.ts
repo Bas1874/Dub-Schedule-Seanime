@@ -1,34 +1,3 @@
-/// <reference path="../plugin.d.ts" />
-/// <reference path="../app.d.ts" />
-/// <reference path="../core.d.ts" />
-
-// Type for the items from the external JSON file
-interface DubScheduleItem {
-    episodeDate: string;
-    episodeNumber: number;
-    media: {
-        media: {
-            id: number;
-        }
-    };
-}
-
-// The exact format Seanime's schedule page expects
-interface Anime_ScheduleItem {
-    mediaId: number;
-    title: string;
-    time: string;
-    dateTime?: string;
-    image: string;
-    episodeNumber: number;
-    isMovie: boolean;
-    isSeasonFinale: boolean;
-}
-
-type ScheduleFilter = "all" | "dub" | "sub" | "prefer-dub";
-// Updated type to include the new format option
-type DubFormat = 'icon' | 'bracket' | 'icon-only';
-
 function init() {
     // This hook intercepts the schedule data just before it's sent to the user's screen.
     $app.onAnimeScheduleItems((e) => {
@@ -111,7 +80,7 @@ function init() {
         // Event handlers for the format buttons
         ctx.registerEventHandler("set-format-icon", () => dubFormatState.set('icon'));
         ctx.registerEventHandler("set-format-bracket", () => dubFormatState.set('bracket'));
-        ctx.registerEventHandler("set-format-icon-only", () => dubFormatState.set('icon-only')); // New handler
+        ctx.registerEventHandler("set-format-icon-only", () => dubFormatState.set('icon-only'));
 
         // Effect for filter changes
         ctx.effect(() => {
@@ -166,13 +135,44 @@ function init() {
                 ],
             });
         });
+        
+        // --- NEW TYPE FOR THE FEED DATA ---
+        interface DubFeedItem {
+            id: number;
+            episode: {
+                aired: number;
+                airedAt: string;
+            };
+        }
 
         // --- BACKGROUND DATA FETCHING & PROJECTION ---
         const fetchAndProcessDubSchedule = async () => {
             try {
-                const response = await ctx.fetch("https://raw.githubusercontent.com/RockinChaos/AniSchedule/refs/heads/master/readable/dub-schedule-readable.json");
-                if (!response.ok) return;
-                const dubSchedule: DubScheduleItem[] = response.json();
+                // Fetch both current schedule and past feed
+                const currentScheduleResponse = await ctx.fetch("https://raw.githubusercontent.com/RockinChaos/AniSchedule/master/raw/dub-schedule.json");
+                const pastFeedResponse = await ctx.fetch("https://raw.githubusercontent.com/RockinChaos/AniSchedule/master/raw/dub-episode-feed.json");
+
+                if (!currentScheduleResponse.ok || !pastFeedResponse.ok) {
+                    console.error("Failed to fetch one or both dub schedules.");
+                    return;
+                }
+
+                const currentDubSchedule: DubScheduleItem[] = currentScheduleResponse.json();
+                const pastDubFeed: DubFeedItem[] = pastFeedResponse.json();
+
+                // Transform the past feed data to match the DubScheduleItem structure
+                const transformedPastSchedule: DubScheduleItem[] = pastDubFeed.map(item => ({
+                    episodeDate: item.episode.airedAt,
+                    episodeNumber: item.episode.aired,
+                    media: {
+                        media: {
+                            id: item.id
+                        }
+                    }
+                }));
+
+                // Combine the current and past schedules
+                const dubSchedule = [...currentDubSchedule, ...transformedPastSchedule];
                 
                 const animeCollection = await $anilist.getAnimeCollection(true);
                 if (!animeCollection) return;
@@ -185,10 +185,19 @@ function init() {
                 if (dubFormat === 'bracket') {
                     dubPrefix = "[DUB] ";
                 } else if (dubFormat === 'icon-only') {
-                    dubPrefix = "🎙️- ";
+                    dubPrefix = "🎙️ - ";
                 }
 
+                // Create a Set to track unique combinations of mediaId and episodeNumber
+                const uniqueEntries = new Set<string>();
+
                 for (const dubItem of dubSchedule) {
+                    const uniqueKey = `${dubItem.media.media.id}-${dubItem.episodeNumber}`;
+                    if (uniqueEntries.has(uniqueKey)) {
+                        continue; // Skip if this episode for this anime has already been processed
+                    }
+                    uniqueEntries.add(uniqueKey);
+
                     const anime = findAnimeInCollection(dubItem.media.media.id, animeCollection);
                     
                     if (anime) {
@@ -207,7 +216,12 @@ function init() {
                         };
                         realDubItems.push(realItem);
 
-                        if (totalEpisodes > 0) {
+                        // Only project future episodes for items from the current schedule
+                        const isFromCurrentSchedule = currentDubSchedule.some(
+                            item => item.media.media.id === dubItem.media.media.id && item.episodeNumber === dubItem.episodeNumber
+                        );
+
+                        if (isFromCurrentSchedule && totalEpisodes > 0) {
                             const episodesLeft = totalEpisodes - dubItem.episodeNumber;
                             if (episodesLeft > 0) {
                                 for (let i = 1; i <= episodesLeft; i++) {
