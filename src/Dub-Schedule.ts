@@ -32,13 +32,13 @@ function init() {
     $app.onAnimeScheduleItems((e) => {
         try {
             // First, create a clean, definitive list of original (sub) items.
-            const originalSubItems = (e.items || []).filter(item => !item.title.startsWith("[DUB]"));
+            const originalSubItems = (e.items || []).filter(item => !item.title.startsWith("🎙️Dub - "));
             
             // Get the user's current filter preference and the list of dubbed items.
             const filter = $store.get<ScheduleFilter>("schedule-filter") || "all";
             const dubbedItems = $store.get<Anime_ScheduleItem[]>("dub-schedule-items") || [];
 
-            // Filtering logic has been updated to remove "prefer-sub"
+            // Filtering logic
             if (filter === "dub") {
                 e.items = dubbedItems;
             } 
@@ -90,7 +90,7 @@ function init() {
             withContent: true,
         });
 
-        // Event handlers for the tray buttons, "set-filter-prefer-sub" removed
+        // Event handlers for the tray buttons
         ctx.registerEventHandler("set-filter-all", () => filterState.set("all"));
         ctx.registerEventHandler("set-filter-dub", () => filterState.set("dub"));
         ctx.registerEventHandler("set-filter-sub", () => filterState.set("sub"));
@@ -113,7 +113,7 @@ function init() {
 
         }, [filterState]);
 
-        // Define the UI components inside the tray pop-up, "Prefer Subs" button removed.
+        // Define the UI components inside the tray pop-up.
         tray.render(() => {
             const currentFilter = filterState.get();
             return tray.stack({
@@ -150,7 +150,7 @@ function init() {
                         
                         const realItem: Anime_ScheduleItem = {
                             mediaId: anime.id,
-                            title: `[DUB] ${anime.title?.userPreferred}`,
+                            title: `🎙️Dub - ${anime.title?.userPreferred}`,
                             time: airingDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }),
                             dateTime: airingDate.toISOString(),
                             image: anime.coverImage?.large || anime.coverImage?.medium!,
@@ -170,7 +170,7 @@ function init() {
 
                                     projectedDubItems.push({
                                         mediaId: anime.id,
-                                        title: `[DUB] ${anime.title?.userPreferred}`,
+                                        title: `🎙️Dub - ${anime.title?.userPreferred}`,
                                         time: futureDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }),
                                         dateTime: futureDate.toISOString(),
                                         image: anime.coverImage?.large || anime.coverImage?.medium!,
@@ -203,38 +203,6 @@ function init() {
             }
             return null;
         }
-
-        // --- DOM MANIPULATION FOR DUB BADGES ---
-        const addDubBadges = async (entries: $ui.DOMElement[]) => {
-            for (const entry of entries) {
-                try {
-                    if (await entry.queryOne(".dub-badge")) continue;
-                    const titleEl = await entry.queryOne("p");
-                    if (!titleEl) continue;
-                    const titleText = await titleEl.getText();
-                    if (titleText.startsWith("[DUB]")) {
-                        const badge = await ctx.dom.createElement("span");
-                        badge.setText("DUB");
-                        badge.setAttribute("class", "dub-badge");
-                        badge.setStyle("background-color", "rgb(var(--brand-color))");
-                        badge.setStyle("color", "white");
-                        badge.setStyle("padding", "2px 6px");
-                        badge.setStyle("font-size", "10px");
-                        badge.setStyle("border-radius", "4px");
-                        badge.setStyle("margin-right", "8px");
-                        badge.setStyle("font-weight", "bold");
-                        await titleEl.before(badge);
-                        await titleEl.setText(titleText.replace("[DUB]", "").trim());
-                    }
-                } catch (e) { /* fail silently */ }
-            }
-        };
-
-        ctx.screen.onNavigate(e => {
-            if (e.pathname === "/schedule") {
-                ctx.dom.observe("[data-testid='schedule-entry']", addDubBadges);
-            }
-        });
 
         // --- INITIALIZATION ---
         fetchAndProcessDubSchedule();
