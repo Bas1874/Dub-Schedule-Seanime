@@ -224,8 +224,10 @@ function init() {
                     }
                 }));
 
-                // Combine the current and past schedules
-                const dubSchedule = [...currentDubSchedule, ...transformedPastSchedule];
+                // Combine past and current schedules. Past feed goes FIRST so that an
+                // already-aired episode keeps its real aired date if the same episode also
+                // appears as a node in the current schedule (first date wins during dedup).
+                const dubSchedule = [...transformedPastSchedule, ...currentDubSchedule];
 
                 // Try a fresh collection first; fall back to the cached one if AniList
                 // isn't reachable yet (common right after startup).
@@ -258,20 +260,43 @@ function init() {
                     }
                 }
 
-                // Create a Set to track unique combinations of mediaId and episodeNumber
+                // Flatten every source into individual (mediaId, episodeNumber, date) airings.
+                // Past-feed items are single aired episodes. Current-schedule items now carry
+                // the REAL upcoming episodes in media.media.airingSchedule.nodes — expand those
+                // so the calendar shows the full forward view (multiple weeks ahead) with the
+                // actual scraped dates. Falls back to the single top-level episode for any
+                // older data that has no nodes.
+                const airings = [];
+                for (const dubItem of dubSchedule) {
+                    const mediaId = dubItem?.media?.media?.id;
+                    if (!mediaId) continue;
+                    const nodes = dubItem?.media?.media?.airingSchedule?.nodes;
+                    if (Array.isArray(nodes) && nodes.length > 0) {
+                        for (const node of nodes) {
+                            if (node?.episode == null || !node?.airingAt) continue;
+                            airings.push({ mediaId, episodeNumber: node.episode, episodeDate: node.airingAt });
+                        }
+                    } else {
+                        airings.push({ mediaId, episodeNumber: dubItem.episodeNumber, episodeDate: dubItem.episodeDate });
+                    }
+                }
+
+                // Track unique combinations of mediaId and episodeNumber (first date wins —
+                // past-feed entries are processed before schedule nodes, so an already-aired
+                // episode keeps its real aired date over any predicted one).
                 const uniqueEntries = new Set();
 
-                for (const dubItem of dubSchedule) {
-                    const uniqueKey = `${dubItem.media.media.id}-${dubItem.episodeNumber}`;
+                for (const airing of airings) {
+                    const uniqueKey = `${airing.mediaId}-${airing.episodeNumber}`;
                     if (uniqueEntries.has(uniqueKey)) {
                         continue; // Skip if this episode for this anime has already been processed
                     }
                     uniqueEntries.add(uniqueKey);
 
-                    const anime = collectionMap.get(dubItem.media.media.id);
+                    const anime = collectionMap.get(airing.mediaId);
 
                     if (anime) {
-                        const airingDate = new Date(dubItem.episodeDate);
+                        const airingDate = new Date(airing.episodeDate);
                         const totalEpisodes = anime.episodes ? parseInt($toString(anime.episodes)) : 0;
 
                         const scheduleItem = {
@@ -282,9 +307,9 @@ function init() {
                             time: airingDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }),
                             dateTime: airingDate.toISOString(),
                             image: anime.coverImage?.large || anime.coverImage?.medium,
-                            episodeNumber: dubItem.episodeNumber,
+                            episodeNumber: airing.episodeNumber,
                             isMovie: anime.format === "MOVIE",
-                            isSeasonFinale: totalEpisodes > 0 && dubItem.episodeNumber === totalEpisodes,
+                            isSeasonFinale: totalEpisodes > 0 && airing.episodeNumber === totalEpisodes,
                         };
                         allDubbedItems.push(scheduleItem);
                     }
